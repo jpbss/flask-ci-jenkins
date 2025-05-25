@@ -1,67 +1,66 @@
-// meu_projeto_flask/Jenkinsfile
+// Jenkinsfile Otimizado
 pipeline {
     agent {
-        // Define o ambiente de execução como um contêiner Docker com Python 3.10
         docker {
-            image 'python:3.10-slim-buster' // Imagem Python leve para agilidade
-            args '-u root' // Executa como root no contêiner para evitar problemas de permissão na instalação de libs
+            image 'python:3.10-slim-buster'
+            // Adiciona um volume para o cache do pip.
+            // 'pip_cache' será um volume Docker gerenciado no host onde o agente roda.
+            // Como estamos usando '-u root', o diretório de cache do pip para root é /root/.cache/pip
+            args '-u root -v pip_cache:/root/.cache/pip'
         }
     }
 
     environment {
-        // Define uma variável de ambiente para a pasta do ambiente virtual
         VENV_DIR = 'venv'
-        // Adiciona a pasta bin do ambiente virtual ao PATH para que os comandos sejam encontrados
         PATH = "${VENV_DIR}/bin:${env.PATH}"
-        // Adiciona o diretório de trabalho atual ao PYTHONPATH, garantindo que módulos como 'app.py' sejam encontrados.
-        // Isso complementa o pytest.ini.
         PYTHONPATH = '.'
     }
 
     stages {
         stage('Checkout Code') {
             steps {
-                // 'checkout scm' é uma instrução padrão para pipelines multibranch.
-                // O Jenkins clonará automaticamente a branch da PR que acionou o build.
-                checkout scm
+                echo 'Clonando o repositório (shallow clone)...'
+                // Modificado para fazer um shallow clone (profundidade 1)
+                checkout([
+                    $class: 'GitSCM',
+                    branches: scm.branches,
+                    doGenerateSubmoduleConfigurations: scm.doGenerateSubmoduleConfigurations,
+                    extensions: [[$class: 'CloneOption', depth: 1, noTags: true, shallow: true, timeout: 20]], // Shallow clone com timeout
+                    userRemoteConfigs: scm.userRemoteConfigs
+                ])
             }
         }
 
         stage('Setup Environment and Install Dependencies') {
             steps {
-                echo 'Criando ambiente virtual e instalando dependências...'
-                sh 'python -m venv $VENV_DIR' // Cria o ambiente virtual
-                sh 'pip install --no-cache-dir -r requirements.txt' // Instala as dependências do requirements.txt
+                echo 'Criando ambiente virtual e instalando dependências (usando cache do pip)...'
+                sh 'python -m venv $VENV_DIR'
+                // Removido --no-cache-dir para permitir que o pip use o cache montado
+                sh "pip install -r requirements.txt" //
             }
         }
 
         stage('Run Tests') {
             steps {
-                echo 'Rodando testes com pytest...'
-                // Executa os testes. -v para verbose, -s para mostrar print's
-                // --junitxml=test-results.xml gera um relatório JUnit para o Jenkins
-                sh 'pytest -vs --junitxml=test-results.xml'
+                echo 'Rodando testes com pytest (com paralelização)...'
+                // Adicionado -n auto para paralelização com pytest-xdist
+                // Certifique-se de adicionar 'pytest-xdist' ao seu requirements.txt
+                sh 'pytest -vs --junitxml=test-results.xml -n auto'
             }
         }
     }
 
     post {
-        // Bloco 'always' é executado sempre, independentemente do resultado do stage
         always {
             echo 'Publicando resultados de testes...'
-            // Publica os resultados dos testes JUnit para o Jenkins
-            // Requer o plugin "JUnit Plugin" instalado no Jenkins
             junit 'test-results.xml'
         }
-        // Bloco 'success' é executado se todos os stages passarem
         success {
             echo '✅ Pipeline concluído com SUCESSO. Testes passaram.'
         }
-        // Bloco 'failure' é executado se qualquer stage falhar
         failure {
             echo '❌ Pipeline falhou. Testes NÃO passaram.'
         }
-        // Bloco 'unstable' é executado se o build for instável (ex: testes falharam, mas o pipeline continuou)
         unstable {
             echo '⚠️ Pipeline instável. Houve falhas em testes.'
         }
